@@ -381,7 +381,7 @@ Useful for previewing what would be stored or for offline analysis.`, {
 // Tool: rerank  →  POST /rerank
 // ============================================================================
 server.tool("rerank", `Rerank candidate documents by relevance via MemOS reranker model.`, {
-    model: z.enum(["memos-reranker-0.6b", "memos-reranker-4b"]).describe("Reranker model name."),
+    model: z.enum(["memos-reranker-0.6b", "memos-reranker-4b"]).describe("Reranker model. Allowed values: 'memos-reranker-0.6b' (lightweight, faster) or 'memos-reranker-4b' (more accurate)."),
     query: z.string().describe("Query text used for relevance matching."),
     documents: z.array(z.string()).describe("Candidate documents. Total tokens ≤ 8k."),
     top_n: z.number().int().min(1).optional().describe("Return top N results. Default: all.")
@@ -544,13 +544,14 @@ Files are processed asynchronously; check status via get_kb_documents.`, {
 // Tool: get_kb_documents  →  POST /get/knowledgebase-file
 // ============================================================================
 server.tool("get_kb_documents", `List or fetch knowledge base files via MemOS cloud /get/knowledgebase-file.
-Mode A (list): pass knowledgebase_id (+ optional type/page/page_size).
-Mode B (lookup): pass file_ids[] for specific files.`, {
-    knowledgebase_id: z.string().optional().describe("Mode A: knowledge base ID to list files from"),
-    type: z.enum(["document", "skill"]).optional().describe("Mode A: filter by file type"),
-    page: z.number().int().min(1).optional().describe("Mode A: page number"),
-    page_size: z.number().int().min(1).optional().describe("Mode A: items per page"),
-    file_ids: z.array(z.string()).optional().describe("Mode B: explicit file IDs to fetch")
+Two mutually exclusive modes — pick exactly one:
+  • Mode A (list): pass knowledgebase_id (+ optional type/page/page_size). Do NOT pass file_ids.
+  • Mode B (lookup): pass file_ids[]. Do NOT pass knowledgebase_id/type/page/page_size.`, {
+    knowledgebase_id: z.string().optional().describe("Mode A only: knowledge base ID to list files from. Mutually exclusive with file_ids."),
+    type: z.enum(["document", "skill"]).optional().describe("Mode A only: filter by file type ('document' or 'skill'). Ignored in Mode B."),
+    page: z.number().int().min(1).optional().describe("Mode A only: page number. Ignored in Mode B."),
+    page_size: z.number().int().min(1).optional().describe("Mode A only: items per page. Ignored in Mode B."),
+    file_ids: z.array(z.string()).optional().describe("Mode B only: explicit file IDs to fetch. Mutually exclusive with knowledgebase_id.")
 }, async (args) => {
     try {
         const body = {};
