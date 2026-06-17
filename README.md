@@ -26,6 +26,19 @@ npm install
 npm run build
 ```
 
+### 冒烟测试
+
+仓库内置 `scripts/smoke.mjs`,会以 stdio 启动 `build/index.js` 并依次调用 `tools/list` → `add_message` → `search_memory` → `get_user_profile` → `extract_memory` → `rerank` → `delete_memory`,最后把测试用户的记忆清掉。
+
+```bash
+npm run build
+MEMOS_API_KEY=sk-xxxxxxxxxxxxxxxx \
+MEMOS_USER_ID=smoke_$(date +%s) \
+  node scripts/smoke.mjs
+```
+
+通过后说明 15 个工具的 schema、鉴权、序列化全部 OK。改完 schema 后建议跑一遍。
+
 ## MCP 客户端配置
 
 ```json
