@@ -46,6 +46,7 @@ const addRes = await client.callTool({
       { role: "assistant", content: "推荐【蜀大侠、小龙坎、大龙燚】这几家连锁,本地老店可以试【马路边边】" }
     ],
     app_id: "smoke_test_app",
+    allow_memory_view: ["detail_factual"],
     tags: ["travel", "chengdu", "hotpot"],
     info: { scene: "qa", topic: "成都火锅推荐", lang: "zh" },
     async_mode: false
@@ -62,23 +63,52 @@ const searchRes = await client.callTool({
   arguments: {
     query: "成都吃饭",
     conversation_id: CONV_ID,
+    filter: {
+      and: [
+        { app_id: "smoke_test_app" },
+        { tags: { contains: "chengdu" } }
+      ]
+    },
     memory_limit_number: 3,
-    include_preference: false,
-    include_tool_memory: false,
-    include_skill: false,
+    include_memory_view: ["detail_factual"],
     relativity: 0
   }
 });
 log("search_memory", searchRes);
 
-// 5. get_user_profile (page 1)
+// 5. update_memory (direct edit by returned memory ID)
+const firstMemoryId = searchRes.structuredContent?.data?.memory_detail_list?.[0]?.id;
+if (!firstMemoryId) {
+  throw new Error("search_memory returned no memory ID for update_memory smoke test");
+}
+const updateRes = await client.callTool({
+  name: "update_memory",
+  arguments: {
+    memory_id: firstMemoryId,
+    title: "成都火锅行程（已验证更新）"
+  }
+});
+log("update_memory", updateRes);
+
+// 6. add_feedback (conversation-based correction)
+const feedbackRes = await client.callTool({
+  name: "add_feedback",
+  arguments: {
+    conversation_id: CONV_ID,
+    feedback_content: "补充说明：这是 MCP 云端接口冒烟测试数据。",
+    app_id: "smoke_test_app"
+  }
+});
+log("add_feedback", feedbackRes);
+
+// 7. get_user_profile (page 1)
 const profileRes = await client.callTool({
   name: "get_user_profile",
   arguments: { page: 1, size: 5, include_preference: false, include_tool_memory: false }
 });
 log("get_user_profile", profileRes);
 
-// 6. extract_memory (no persistence)
+// 8. extract_memory (no persistence)
 const extractRes = await client.callTool({
   name: "extract_memory",
   arguments: {
@@ -91,7 +121,7 @@ const extractRes = await client.callTool({
 });
 log("extract_memory", extractRes);
 
-// 7. rerank
+// 9. rerank
 const rerankRes = await client.callTool({
   name: "rerank",
   arguments: {
@@ -108,7 +138,7 @@ const rerankRes = await client.callTool({
 });
 log("rerank", rerankRes);
 
-// 8. delete_memory by user_id (cleanup)
+// 10. delete_memory by user_id (cleanup)
 const delRes = await client.callTool({
   name: "delete_memory",
   arguments: { user_id: USER_ID }
