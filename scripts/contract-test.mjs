@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import http from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -36,6 +37,29 @@ const client = new Client(
 
 try {
   await client.connect(transport);
+
+  const readmeText = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readmeText, /## MCP Prompt 模块/);
+  assert.match(readmeText, /默认只做项目级隔离/);
+  assert.match(readmeText, /code: 0.*结果列表为空表示检索成功但没有命中/s);
+  assert.match(readmeText, /task_id.*get_task_status/s);
+
+  const { prompts } = await client.listPrompts();
+  assert(
+    prompts.some((prompt) => prompt.name === "memos_mandatory_workflow"),
+    "mandatory memory workflow prompt must be exposed"
+  );
+  const workflowPrompt = await client.getPrompt({ name: "memos_mandatory_workflow" });
+  const workflowText = workflowPrompt.messages
+    .map((message) => message.content.type === "text" ? message.content.text : "")
+    .join("\n");
+  assert.match(workflowText, /Start with project-level isolation only/);
+  assert.match(workflowText, /Do NOT add `tags`, `scene`, or other metadata filters by default/);
+  assert.match(workflowText, /code: 0.*empty result lists means the search succeeded/s);
+  assert.match(workflowText, /never `\{ "info": \{ "scene": "coding" \} \}`/);
+  assert.match(workflowText, /use the returned `task_id` with `get_task_status`/);
+  assert.match(workflowText, /same project `app_id` for writes and project-scoped searches/);
+  assert.match(workflowText, /stable `conversation_id` for the whole conversation/);
 
   const { tools } = await client.listTools();
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
@@ -150,7 +174,7 @@ try {
     content: "更新后的内容"
   });
 
-  console.log("contract-test: 5 official API payloads verified");
+  console.log("contract-test: README prompt, runtime workflow prompt, and 5 API payloads verified");
 } finally {
   await client.close().catch(() => {});
   await new Promise((resolve) => api.close(resolve));

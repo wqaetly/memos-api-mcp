@@ -184,26 +184,39 @@ Every user message
 
 ### 1) 🔍 search_memory
 - Required: \`query\` (concise summary of the user message)
-- Recommended: \`conversation_id\` (stable per-thread ID managed by the client),
+- Recommended defaults: \`conversation_id\` (stable per-thread ID managed by the client),
   \`memory_limit_number\` = 3, \`include_memory_view\` = ["detail_factual"]
-- Use \`filter\` to narrow scope (must wrap in \`and\`/\`or\`):
+- Start with project-level isolation only. Keep the same \`app_id\` here and in \`add_message\`:
   \`\`\`json
   { "and": [
-    { "app_id": "<your-app-id>" },
-    { "tags": { "contains": "<topic-tag>" } }
+    { "app_id": "<your-app-id>" }
   ]}
   \`\`\`
+- Every filter must be wrapped in \`and\` or \`or\`.
+- Do NOT add \`tags\`, \`scene\`, or other metadata filters by default. Add them only when the
+  same values were written consistently and narrower retrieval is genuinely needed; otherwise
+  an exact filter can hide relevant memories.
+- Metadata stored in \`info\` is flattened by MemOS. Filter with \`{ "scene": "coding" }\`,
+  never \`{ "info": { "scene": "coding" } }\` or \`{ "info.scene": "coding" }\`.
+- \`code: 0\` with empty result lists means the search succeeded but found no matching memory.
+  This is expected on a first turn or when the current scope has not been written yet. Answer
+  normally and still run \`add_message\` so later turns can recall the new context.
 
 ### 2) 💬 Answer
 Judge relevance; use only memories that truly help; otherwise ignore and answer normally.
 
 ### 3) 💾 add_message
-- Required: \`messages\` (user + assistant of this turn, OpenAI chat format),
-  \`conversation_id\`
-- Recommended:
+- After composing the final answer, save the exact user message and exact assistant answer before
+  the turn ends.
+- Required by this workflow: \`messages\`, the same stable \`conversation_id\`, and the same
+  project \`app_id\` used by \`search_memory.filter\`.
+- Recommended defaults:
+  - \`async_mode\`: \`true\`
   - \`tags\`: human-readable topic tags
   - \`info\`: structured metadata (keys become searchable filters)
-    Suggested keys: \`app_id\`, \`agent_id\`, \`scene\`, \`business_type\`, \`biz_id\`, \`lang\`, \`topic\`
+    Suggested keys: \`agent_id\`, \`module\`, \`scene\`, \`business_type\`, \`biz_id\`, \`lang\`, \`topic\`
+- Async extraction may not be searchable immediately. When immediate verification is required,
+  use the returned \`task_id\` with \`get_task_status\` and search after completion (or retry).
 
 ## 🔄 Update / Delete
 - Delete: find IDs via \`search_memory\` → call \`delete_memory\`.
@@ -217,7 +230,9 @@ Judge relevance; use only memories that truly help; otherwise ignore and answer 
 ## Non-Negotiable Client Responsibilities
 1. Always call \`search_memory\` before answering and \`add_message\` after answering.
 2. Maintain a stable \`conversation_id\` for the whole conversation.
-3. Prefer \`info.<key>\` and \`tags\` for precise filter matches.
+3. Use the same project \`app_id\` for writes and project-scoped searches.
+4. Treat empty successful searches as no-match results, not as MCP failures.
+5. Use flattened metadata field names and add narrow filters only when their values are known.
 `
       }
     }]
