@@ -23,24 +23,34 @@ const server = new McpServer({
 // Shared Zod schemas reused across tools (cloud OpenAPI-aligned)
 // ============================================================================
 
+const memoryViewSchema = z.enum([
+  "detail_factual",
+  "preference",
+  "skill",
+  "profile",
+  "event",
+  "tool_memory"
+]);
+
 const chatMessageSchema = z.object({
   role: z.enum(["system", "user", "assistant", "tool"]).describe("Message role"),
-  content: z.union([z.string(), z.array(z.any())]).optional().describe(
-    "Message content. Plain string or OpenAI-compatible structured parts. Optional for 'assistant' when only tool_calls is present."
+  content: z.union([z.string(), z.array(z.any())]).describe(
+    "Message content. Plain text or structured text/image/file parts."
   ),
-  name: z.string().optional().describe("Optional participant name"),
   chat_time: z.string().optional().describe("Message chat time (ISO string or natural-language Chinese)"),
-  message_id: z.string().optional().describe("Message ID"),
+  role_id: z.string().optional().describe("Speaker ID, recommended for group conversations"),
+  role_name: z.string().optional().describe("Speaker name; use together with role_id"),
   tool_call_id: z.string().optional().describe("Required when role='tool'"),
   tool_calls: z.array(z.any()).optional().describe("Tool calls list when role='assistant'")
 }).describe(
-  "Chat message following OpenAI ChatCompletion schema (system/user/assistant/tool)."
+  "Message accepted by MemOS Add Message (system/user/assistant/tool)."
 );
 
 const filterSchema = z.record(z.any()).describe(
   "Memory filter. Supports logical ('and','or') and comparison ('gt','gte','lt','lte') operators. " +
-  "Source-specific shortcuts: 'user', 'public', 'knowledgebase'. " +
-  "All keys written via 'info'/'tags' are filterable. Always wrap in 'and'/'or' (no bare top-level field)."
+  "Source-specific groups: 'user', 'agent', 'public', 'knowledgebase'. " +
+  "Fields written via 'info' are addressed directly; tags use {contains: value}. " +
+  "Each condition group must be rooted at 'and' or 'or'."
 );
 
 const kbFileSchema = z.object({
@@ -175,12 +185,12 @@ Every user message
 ### 1) 🔍 search_memory
 - Required: \`query\` (concise summary of the user message)
 - Recommended: \`conversation_id\` (stable per-thread ID managed by the client),
-  \`memory_limit_number\` = 3, \`include_preference\` = false
+  \`memory_limit_number\` = 3, \`include_memory_view\` = ["detail_factual"]
 - Use \`filter\` to narrow scope (must wrap in \`and\`/\`or\`):
   \`\`\`json
   { "and": [
     { "app_id": "<your-app-id>" },
-    { "tags":  "<topic-tag>" }
+    { "tags": { "contains": "<topic-tag>" } }
   ]}
   \`\`\`
 
@@ -197,7 +207,8 @@ Judge relevance; use only memories that truly help; otherwise ignore and answer 
 
 ## 🔄 Update / Delete
 - Delete: find IDs via \`search_memory\` → call \`delete_memory\`.
-- Modify/correct: call \`add_feedback\` with \`feedback_content\` and the same \`conversation_id\`.
+- Direct edit by memory ID: call \`update_memory\`.
+- Conversation-based correction: call \`add_feedback\` with \`feedback_content\` and the same \`conversation_id\`.
 
 ## 👤 Identity Summary
 - For "Who am I?" / "What do you know about me?" questions, call \`get_user_profile\`
@@ -214,7 +225,7 @@ Judge relevance; use only memories that truly help; otherwise ignore and answer 
 );
 
 // ============================================================================
-// Tool: add_message  →  POST /add/message
+// Tool: add_message  -> POST /add/message
 // ============================================================================
 
 server.tool(
@@ -223,52 +234,49 @@ server.tool(
 Auto-invoked by the client after every answer to persist turn history.
 Use this for storing NEW information. For corrections use add_feedback.`,
   {
-    conversation_id: z.string().describe(
+    user_id: z.union([z.string(), z.array(z.string()).max(20)]).optional().describe(
+      "User ID or up to 20 user IDs. Defaults to MEMOS_USER_ID when omitted."
+    ),
+    agent_id: z.union([z.string(), z.array(z.string())]).optional().describe(
+      "Agent ID or Agent ID list associated with the messages."
+    ),
+    conversation_id: z.string().optional().describe(
       "Conversation ID. Messages with the same conversation_id are treated as one context."
     ),
-    messages: z.union([
-      z.string(),
-      z.array(chatMessageSchema)
-    ]).describe(
-      "Messages to store. Either a plain string or an array of OpenAI chat messages. Total tokens ≤ 40k."
+    messages: z.array(chatMessageSchema).min(1).describe(
+      "Messages to store. Total tokens must not exceed 40k."
     ),
-    agent_id: z.string().optional().describe("Associated Agent identifier"),
     app_id: z.string().optional().describe("Associated application identifier"),
+    allow_memory_view: z.array(memoryViewSchema).optional().describe(
+      "Memory types allowed to be extracted. Defaults to all supported types."
+    ),
     tags: z.array(z.string()).optional().describe(
       "Custom topic/classification labels. Filterable via search_memory.filter."
     ),
     info: z.record(z.any()).optional().describe(
-      "Custom metadata. Keys become filterable in search. " +
-      "Example: { app_id, agent_id, source_type, source_url, source_content }"
+      "Custom metadata. Keys become directly filterable in search."
     ),
     allow_public: z.boolean().optional().describe(
-      "Allow memory writes to public library. Default: false."
+      "Allow memory writes to the project public library. Default: false."
     ),
     allow_knowledgebase_ids: z.array(z.string()).optional().describe(
-      "Knowledge base IDs allowed for memory write. Default: []."
+      "Knowledge base IDs allowed for memory writes."
     ),
     async_mode: z.boolean().optional().describe(
-      "Enable async memory processing. Default: true."
-    ),
-    user_id: z.string().optional().describe(
-      "User ID. Defaults to MEMOS_USER_ID env when omitted."
+      "Enable asynchronous memory processing. Default: true."
     )
   },
   async (args) => {
     try {
-      const user_id = args.user_id ?? requireEnv("MEMOS_USER_ID");
-      const messagesNormalized = Array.isArray(args.messages)
-        ? normalizeMessages(args.messages)
-        : args.messages;
-
       const body: Record<string, any> = {
-        user_id,
-        conversation_id: args.conversation_id,
-        messages: messagesNormalized
+        messages: normalizeMessages(args.messages)
       };
+      const userId = args.user_id ?? process.env.MEMOS_USER_ID;
+      if (userId !== undefined) body.user_id = userId;
+
       const passthrough: (keyof typeof args)[] = [
-        "agent_id", "app_id", "tags", "info", "allow_public",
-        "allow_knowledgebase_ids", "async_mode"
+        "agent_id", "conversation_id", "app_id", "allow_memory_view",
+        "tags", "info", "allow_public", "allow_knowledgebase_ids", "async_mode"
       ];
       for (const k of passthrough) {
         if (args[k] !== undefined) body[k] = args[k];
@@ -283,64 +291,77 @@ Use this for storing NEW information. For corrections use add_feedback.`,
 );
 
 // ============================================================================
-// Tool: search_memory  →  POST /search/memory
+// Tool: search_memory  -> POST /search/memory
 // ============================================================================
 
 server.tool(
   "search_memory",
   `Retrieve memories via MemOS cloud /search/memory.
 MUST be auto-invoked by the client before generating every answer.
-Use 'filter' for precise scoping (e.g., by tags, app_id, agent_id).`,
+Use filter for precise scoping by app_id, agent_id, tags, time, or custom info fields.`,
   {
     query: z.string().describe("Search query text. Max 40k tokens per query."),
+    user_id: z.string().optional().describe(
+      "User ID to search. Defaults to MEMOS_USER_ID when neither user_id nor agent_id is provided."
+    ),
+    agent_id: z.string().optional().describe(
+      "Agent ID to search. Use instead of user_id when independent Agent memory is enabled."
+    ),
     conversation_id: z.string().optional().describe(
       "Conversation ID. Prioritizes memories from the current session for ranking."
     ),
     filter: filterSchema.optional(),
     knowledgebase_ids: z.array(z.string()).optional().describe(
-      "Restrict searchable knowledge bases. Use ['all'] for project-wide access."
+      "Knowledge base IDs accessible to this search. Use ['all'] for every associated knowledge base."
+    ),
+    include_memory_view: z.array(memoryViewSchema).optional().describe(
+      "Memory types allowed in results. Default: ['detail_factual','preference']."
     ),
     memory_limit_number: z.number().int().min(1).max(25).optional().describe(
-      "Max factual memories. Default: 9, Max: 25. Recommended: 3 for low-noise auto-recall."
-    ),
-    include_preference: z.boolean().optional().describe(
-      "Enable preference memory retrieval. Default: true."
-    ),
-    preference_limit_number: z.number().int().min(0).max(25).optional().describe(
-      "Max preference memories. Default: 9, Max: 25."
-    ),
-    include_tool_memory: z.boolean().optional().describe(
-      "Enable tool memory retrieval. Default: false."
-    ),
-    tool_memory_limit_number: z.number().int().min(0).max(25).optional().describe(
-      "Max tool memories. Default: 6, Max: 25."
-    ),
-    include_skill: z.boolean().optional().describe(
-      "Enable skill/procedure retrieval. Default: false."
-    ),
-    skill_limit_number: z.number().int().min(0).max(25).optional().describe(
-      "Max skill memories. Default: 6, Max: 25."
+      "Maximum returned memories after relevance filtering. Default: 9, Max: 25."
     ),
     relativity: z.number().min(0).max(1).optional().describe(
-      "Relevance threshold (0–1). Default: 0.45. 0 disables filtering."
+      "Relevance threshold from 0 to 1. Use 0 to disable relevance filtering."
     ),
-    user_id: z.string().optional().describe(
-      "User ID. Defaults to MEMOS_USER_ID env when omitted."
+    include_preference: z.boolean().optional().describe(
+      "Deprecated compatibility alias. Prefer include_memory_view."
+    ),
+    include_tool_memory: z.boolean().optional().describe(
+      "Deprecated compatibility alias. Prefer include_memory_view."
+    ),
+    include_skill: z.boolean().optional().describe(
+      "Deprecated compatibility alias. Prefer include_memory_view."
     )
   },
   async (args) => {
     try {
-      const user_id = args.user_id ?? requireEnv("MEMOS_USER_ID");
-      const body: Record<string, any> = { user_id, query: args.query };
+      const body: Record<string, any> = { query: args.query };
+
+      if (args.agent_id !== undefined) {
+        body.agent_id = args.agent_id;
+      } else {
+        const userId = args.user_id ?? process.env.MEMOS_USER_ID;
+        if (userId !== undefined) body.user_id = userId;
+      }
 
       const passthrough: (keyof typeof args)[] = [
         "conversation_id", "filter", "knowledgebase_ids",
-        "memory_limit_number", "include_preference", "preference_limit_number",
-        "include_tool_memory", "tool_memory_limit_number",
-        "include_skill", "skill_limit_number", "relativity"
+        "include_memory_view", "memory_limit_number", "relativity"
       ];
       for (const k of passthrough) {
         if (args[k] !== undefined) body[k] = args[k];
+      }
+
+      const legacyViewFlagsPresent =
+        args.include_preference !== undefined ||
+        args.include_tool_memory !== undefined ||
+        args.include_skill !== undefined;
+      if (args.include_memory_view === undefined && legacyViewFlagsPresent) {
+        const views: string[] = ["detail_factual"];
+        if (args.include_preference !== false) views.push("preference");
+        if (args.include_tool_memory === true) views.push("tool_memory");
+        if (args.include_skill === true) views.push("skill");
+        body.include_memory_view = views;
       }
 
       const data = await postJson("/search/memory", body);
@@ -352,7 +373,7 @@ Use 'filter' for precise scoping (e.g., by tags, app_id, agent_id).`,
 );
 
 // ============================================================================
-// Tool: delete_memory  →  POST /delete/memory
+// Tool: delete_memory  -> POST /delete/memory
 // ============================================================================
 
 server.tool(
@@ -384,7 +405,38 @@ For user-requested deletion without IDs, first call search_memory to find them.`
 );
 
 // ============================================================================
-// Tool: add_feedback  →  POST /add/feedback
+// Tool: update_memory  -> POST /update/memory
+// ============================================================================
+
+server.tool(
+  "update_memory",
+  `Directly update an existing memory by ID via MemOS cloud /update/memory.
+Use this when the target memory ID is known. At least one of title or content must be supplied.`,
+  {
+    memory_id: z.string().describe(
+      "Memory ID returned by search_memory, get_user_profile, or another memory listing endpoint."
+    ),
+    title: z.string().optional().describe("Replacement memory title"),
+    content: z.string().optional().describe("Replacement memory content")
+  },
+  async (args) => {
+    try {
+      if (args.title === undefined && args.content === undefined) {
+        throw new Error("At least one of title or content is required");
+      }
+      const body: Record<string, any> = { memory_id: args.memory_id };
+      if (args.title !== undefined) body.title = args.title;
+      if (args.content !== undefined) body.content = args.content;
+      const data = await postJson("/update/memory", body);
+      return okResult(data);
+    } catch (e) {
+      return errResult(e);
+    }
+  }
+);
+
+// ============================================================================
+// Tool: add_feedback  -> POST /add/feedback
 // ============================================================================
 
 server.tool(

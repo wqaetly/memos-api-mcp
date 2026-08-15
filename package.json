@@ -8,6 +8,7 @@
   "scripts": {
     "build": "rimraf build && tsc",
     "postbuild": "node -e \"const fs=require('fs');const p='build/index.js';if(fs.existsSync(p)){const c=fs.readFileSync(p,'utf8');const s='#!/usr/bin/env node\\n';if(!c.startsWith(s))fs.writeFileSync(p,s+c);}\"",
+    "test": "npm run build && node scripts/contract-test.mjs",
     "dev": "tsx src/index.ts",
     "start": "node build/index.js",
     "inspect": "npx @modelcontextprotocol/inspector node build/index.js",
