@@ -43,6 +43,12 @@ try {
   assert.match(readmeText, /默认只做项目级隔离/);
   assert.match(readmeText, /code: 0.*结果列表为空表示检索成功但没有命中/s);
   assert.match(readmeText, /task_id.*get_task_status/s);
+  assert.doesNotMatch(readmeText, /\uFFFD|\uFFFE/, "README must not contain replacement characters");
+  assert.doesNotMatch(readmeText, /\?{3,}/, "README must not contain garbled text (3+ consecutive question marks)");
+  assert.equal((readmeText.match(/MEMOS_PROMPT_START/g) || []).length, 1, "README prompt boundary start must be unique");
+  assert.equal((readmeText.match(/MEMOS_PROMPT_END/g) || []).length, 1, "README prompt boundary end must be unique");
+  const readmePromptMatch = readmeText.match(/MEMOS_PROMPT_START\n([\s\S]*?)\nMEMOS_PROMPT_END/);
+  assert(readmePromptMatch, "README must contain a copyable prompt module between MEMOS_PROMPT_START and MEMOS_PROMPT_END");
 
   const { prompts } = await client.listPrompts();
   assert(
@@ -60,6 +66,11 @@ try {
   assert.match(workflowText, /use the returned `task_id` with `get_task_status`/);
   assert.match(workflowText, /same project `app_id` for writes and project-scoped searches/);
   assert.match(workflowText, /stable `conversation_id` for the whole conversation/);
+  assert.equal(
+    readmePromptMatch[1],
+    workflowText,
+    "README copyable prompt module must be byte-identical to the runtime workflow prompt"
+  );
 
   const { tools } = await client.listTools();
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
